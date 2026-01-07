@@ -1,0 +1,203 @@
+version: '3.8'
+
+networks:
+  red-domotica:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
+
+services:
+  # === BROKER MQTT ===
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: mqtt-broker
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "1883:1883"
+      - "8080:8080"
+    volumes:
+      - ./mosquitto-safe.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+
+  # === SISTEMA SCADA CENTRAL ===
+  scada-central:
+    image: python:3.9-slim
+    container_name: scada-central
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.100
+    ports:
+      - "8081:8081"
+      - "5000:5000"
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt flask flask-cors &&
+             python scada_central.py"
+
+  # === SENSORES DE LUZ ===
+  sensor-luz-salon:
+    image: python:3.9-slim
+    container_name: sensor-luz-salon
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.101
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/sensor_luz.py --zona salon --id sensor_luz_salon"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  sensor-luz-cocina:
+    image: python:3.9-slim
+    container_name: sensor-luz-cocina
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.102
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/sensor_luz.py --zona cocina --id sensor_luz_cocina"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === SENSORES DE TEMPERATURA ===
+  sensor-temp-salon:
+    image: python:3.9-slim
+    container_name: sensor-temp-salon
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.111
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/sensor_temperatura.py --zona salon --id sensor_temp_salon"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === ACTUADORES DE LUCES ===
+  actuador-luces-salon:
+    image: python:3.9-slim
+    container_name: actuador-luces-salon
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.121
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/actuador_luces.py --zona salon --id actuador_luces_salon"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === ACTUADOR DE PERSIANAS ===
+  actuador-persianas:
+    image: python:3.9-slim
+    container_name: actuador-persianas
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.131
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/actuador_persianas.py --id actuador_persianas"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === SISTEMA DE ALARMA ===
+  alarm-server:
+    image: python:3.9-slim
+    container_name: alarm-server
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.151
+    ports:
+      - "9999:9999/udp"
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/alarm_server.py"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === BASE DE DATOS INFLUXDB ===
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.160
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123456
+      - DOCKER_INFLUXDB_INIT_ORG=domotica_lab
+      - DOCKER_INFLUXDB_INIT_BUCKET=sensores
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=1SE1RqzMo6b7FFOc6liKixrM4gPd5EigLGcWW-TJ4E6K1MIeUPDwELJQ8Q6CMvLz7GtfvaXZnr5-lBYC_vIsgA==
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    restart: unless-stopped
+
+  # === TELEGRAF ===
+  telegraf:
+    image: telegraf:1.28
+    container_name: telegraf
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.161
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on:
+      - influxdb
+      - mqtt
+    restart: unless-stopped
+
+  # === GRAFANA ===
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.162
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:
