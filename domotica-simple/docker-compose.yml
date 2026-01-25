@@ -1,0 +1,153 @@
+version: '3.8'
+
+networks:
+  red-domotica:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
+
+services:
+  # === BROKER MQTT ===
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: mqtt-broker
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "1883:1883"
+      - "8080:8080"
+    command: >
+      sh -c "echo 'listener 1883 0.0.0.0
+      allow_anonymous true
+
+      listener 8080 0.0.0.0
+      protocol websockets
+      allow_anonymous true' > /tmp/mosquitto.conf
+      && /docker-entrypoint.sh /usr/sbin/mosquitto -c /tmp/mosquitto.conf"
+    restart: unless-stopped
+
+  # === SISTEMA SCADA CENTRAL ===
+  scada-central:
+    image: python:3.9-slim
+    container_name: scada-central
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.100
+    ports:
+      - "8081:8081"
+      - "5000:5000"
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install -q paho-mqtt flask flask-cors &&
+             python scada_central.py"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === SENSORES DE LUZ ===
+  sensor-luz-salon:
+    image: python:3.9-slim
+    container_name: sensor-luz-salon
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.101
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/sensor_luz.py --zona salon --id sensor_luz_salon"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  sensor-luz-cocina:
+    image: python:3.9-slim
+    container_name: sensor-luz-cocina
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.102
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/sensor_luz.py --zona cocina --id sensor_luz_cocina"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === SENSORES DE TEMPERATURA ===
+  sensor-temp-salon:
+    image: python:3.9-slim
+    container_name: sensor-temp-salon
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.111
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/sensor_temperatura.py --zona salon --id sensor_temp_salon"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === ACTUADORES DE LUCES ===
+  actuador-luces-salon:
+    image: python:3.9-slim
+    container_name: actuador-luces-salon
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.121
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/actuador_luces.py --zona salon --id actuador_luces_salon"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === ACTUADOR DE PERSIANAS ===
+  actuador-persianas:
+    image: python:3.9-slim
+    container_name: actuador-persianas
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.131
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: >
+      sh -c "pip install paho-mqtt &&
+             python nodos/actuador_persianas.py --id actuador_persianas"
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+
+  # === ANALIZADOR DE RED CON WIRESHARK ===
+  network-analyzer:
+    image: nicolaka/netshoot:latest
+    container_name: network-analyzer
+    networks:
+      red-domotica:
+        ipv4_address: 172.28.0.200
+    volumes:
+      - ./capturas:/capturas
+      - ./scripts:/scripts
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    command: >
+      sh -c "mkdir -p /capturas &&
+             echo 'Analizador de red iniciado. Usa: docker exec -it network-analyzer bash' &&
+             tail -f /dev/null"
+    restart: unless-stopped
